@@ -30,115 +30,67 @@ void set_default_priority(void)
 
 bool read_dht(int type, int pin, float &humidity, float &temperature)
 {
-	const int DHT_MAXCOUNT = 32000;
-	const int DHT_PULSES = 41;
-
-	pinMode(pin, OUTPUT);
-
 	set_max_priority();
 
-	digitalWrite(pin, HIGH);
-	delay(100);
-
+	pinMode(pin, OUTPUT);
 	digitalWrite(pin, LOW);
-	delay(10);
-//	delayMicroseconds(2000);
+	delay(18);
 
-	digitalWrite(pin, HIGH);
 	pinMode(pin, INPUT);
+	digitalWrite(pin, HIGH);
 
-	bool timeouted = false;
-	{
-		int count = 0;
-		while (digitalRead(pin))
-		{
-			if (++count >= DHT_MAXCOUNT)
-			{
-				set_default_priority();
-				fprintf(stderr, "timeout: -1\n");
-				timeouted = true;
-				break;
-			}
-			//			delayMicroseconds(1);
-		}
+    uint16_t rawHumidity = 0;
+    uint16_t rawTemperature = 0;
+    uint16_t data = 0;
+
+    for ( int i = -3 ; i < 2 * 40; i++ ) {
+		unsigned int age;
+		unsigned int startTime = micros();
+		do {
+			age = (unsigned long)(micros() - startTime);
+			if ( age > 90 ) {
+				fprintf(stderr, "timeout: %d\n", i);
+                return false;
+  		    }
+		} while ( digitalRead(pin) == (i & 1) ? HIGH : LOW );
+
+	    if ( i >= 0 && (i & 1) ) {
+      		data <<= 1;
+      		if ( age > 30 ) {
+        		data |= 1;
+      		}
+	    }
+
+    	switch ( i ) {
+		case 31:
+			rawHumidity = data;
+        	break;
+		case 63:
+			rawTemperature = data;
+			data = 0;
+			break;
+    	}
 	}
-
-	int pulseCounts[DHT_PULSES * 2] = {0};
-	for (int i = 0;  !timeouted && i < DHT_PULSES; ++i)
-	{
-		while (!timeouted && !digitalRead(pin))
-		{
-			if (++pulseCounts[i * 2 + 0] > DHT_MAXCOUNT)
-			{
-				set_default_priority();
-				fprintf(stderr, "timeout: %d\n", i * 2 + 0);
-				timeouted = true;
-				break;
-			}
-			//			delayMicroseconds(1);
-		}
-		while (!timeouted && digitalRead(pin))
-		{
-			if (++pulseCounts[i * 2 + 1] > DHT_MAXCOUNT)
-			{
-				set_default_priority();
-				fprintf(stderr, "timeout: %d\n", i * 2 + 1);
-				timeouted = true;
-				break;
-			}
-			//			delayMicroseconds(1);
-		}
-	}
-
 	set_default_priority();
-	// time critical parts end here
 
-	int threshold = 0;
-	for (int i = 2; i < DHT_PULSES * 2; i += 2)
-		threshold += pulseCounts[i];
-	threshold /= DHT_PULSES - 1;
-
-	uint8_t data[5] = {0};
-	for (int i = 3; i < DHT_PULSES * 2; i += 2)
-	{
-		const int index = (i - 3) / 16;
-		data[index] <<= 1;
-		if (pulseCounts[i] >= threshold)
-			data[index] |= 1;
-	}
-
-#if 1
-	// Useful debug info:
-	{
-		fprintf(stderr, "debug :");
-		for (int i = 0; i < DHT_PULSES; ++i)
-			fprintf(stderr, "(%d,%d)%s", pulseCounts[i*2 + 0], pulseCounts[i*2 + 1], (i % 8) ? "" : "\ndebug :");
-		fprintf(stderr, "\n");
-	}
-	fprintf(stderr, "debug: threshold = %d\n", threshold);
-	fprintf(stderr, "debug: Data: 0x%x 0x%x 0x%x 0x%x 0x%x\n", data[0], data[1], data[2], data[3], data[4]);
-	fprintf(stderr, "debug: checksum 0x%x\n", (data[0] + data[1] + data[2] + data[3]) & 0xff);
-#endif
-
-	if (data[4] != ((data[0] + data[1] + data[2] + data[3]) & 0xFF))
-	{
+	if ( (uint8_t)(((uint8_t)rawHumidity) + (rawHumidity >> 8) + ((uint8_t)rawTemperature) + (rawTemperature >> 8)) != data ) {
 		fprintf(stderr, "checksum error\n");
 		return false;
 	}
 
-	if (type == DHT11)
-	{
-		humidity = (float)data[0];
-		temperature = (float)data[2];
+ 	// Store readings
+	if ( type == DHT11 ) {
+		humidity = rawHumidity >> 8;
+		temperature = rawTemperature >> 8;
 	}
-	else if (type == DHT22)
+	else
 	{
-		humidity = (data[0] * 256 + data[1]) / 10.0f;
-		temperature = ((data[2] & 0x7F) * 256 + data[3]) / 10.0f;
-		if (data[2] & 0x80)
+		humidity = rawHumidity * 0.1;
+		if ( rawTemperature & 0x8000 )
 		{
-			temperature *= -1.0f;
-		}
+		    rawTemperature = -(int16_t)(rawTemperature & 0x7FFF);
+	    }
+	    temperature = ((int16_t)rawTemperature) * 0.1;
 	}
 	return true;
 }
